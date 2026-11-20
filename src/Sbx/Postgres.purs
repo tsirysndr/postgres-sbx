@@ -11,9 +11,12 @@ profile :: Profile
 profile =
   { tool: "postgres-sbx"
   , product: "PostgreSQL"
+  , serves: const true
   , guestPort: 5432
   , defaultTag: "18"
   , image: \tag -> if String.contains (String.Pattern "/") tag || String.contains (String.Pattern ":") tag then tag else "postgres:" <> tag
+  , versionNote: ""
+  , linuxOnly: false
   , hasCredentials: true
   , defaults: { user: "postgres", password: "postgres", db: "postgres" }
   , dataDir: case _ of
@@ -35,17 +38,18 @@ profile =
       , "POSTGRES_PASSWORD" /\ c.password
       , "POSTGRES_DB" /\ c.db
       ]
-  , command: Nothing
+  , command: const Nothing
   , provision: case _ of
       Linux -> Nothing
       FreeBSD -> Just freebsd
       NetBSD -> Just netbsd
-  , ready: \_ c -> withBsdPath ("pg_isready -q -h 127.0.0.1 -U " <> shellQuote c.user)
-  , client: Guest \_ c -> withBsdPath ("PGPASSWORD=" <> shellQuote c.password <> " psql -h 127.0.0.1 -U " <> shellQuote c.user <> " -d " <> shellQuote c.db)
+  , ready: \_ _ c -> withBsdPath ("pg_isready -q -h 127.0.0.1 -U " <> shellQuote c.user)
+  , client: Guest \_ _ c -> withBsdPath ("PGPASSWORD=" <> shellQuote c.password <> " psql -h 127.0.0.1 -U " <> shellQuote c.user <> " -d " <> shellQuote c.db)
   , clientName: "psql"
+  , clientAliases: []
   , fancy: { name: "pgcli", cmd: HostTool \c port -> [ "pgcli", url c port ] }
-  , url
-  , studioSupported: const true
+  , url: const url
+  , studioSupported: \_ _ -> true
   , dialect: "postgresql"
   , driver: "pg"
   , migrations: Just
