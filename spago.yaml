@@ -2,6 +2,8 @@ package:
   name: postgres-sbx
   dependencies:
     - aff
+    - argonaut-core
+    - refs
     - arrays
     - bsdkrun
     - console
