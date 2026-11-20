@@ -15,10 +15,11 @@ postgres-sbx checkout main         # back to the untouched data
 postgres-sbx branch -d feature     # done with it
 ```
 
-One parent sandbox per tool, with parallel branch instances: a VM named `postgres-sbx`, a ZFS volume named
-`postgres-sbx`, and a small state file under `~/.config/postgres-sbx`. The
-server runs inside the VM; everything else (Studio, drizzle-kit, pgroll, pgcli)
-runs on the host and talks to it over a forwarded port.
+The sandbox uses one ZFS volume named `postgres-sbx` and records its settings
+under `~/.config/postgres-sbx`. Linux servers run as containers in the shared
+Docker VM. FreeBSD/NetBSD servers run inside the tool's BSD VM. Parallel
+instances share the pool but use separate datasets and database processes.
+Host tools connect through each server's own forwarded port.
 
 Written in PureScript on the [bsdkrun PureScript
 SDK](https://github.com/tsirysndr/bsdkrun-purescript).
