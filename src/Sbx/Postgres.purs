@@ -24,6 +24,7 @@ profile =
       FreeBSD -> "/var/db/postgres"
       NetBSD -> "/var/pgsql"
   , rootfsVolume: false
+  , tools: Nothing
   -- The pkg/pkgsrc server packages (llvm for JIT among them) need about
   -- 2 GiB beyond the base image's root disk.
   , rootDisk: case _ of

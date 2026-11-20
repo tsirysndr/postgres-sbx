@@ -101,10 +101,13 @@ serverRunning p = liftEffect (State.load p.tool) >>= case _ of
   Just s | parseOs s.os == Just Linux -> Engine.isRunning p
   _ -> findMachine p <#> maybe false _.running
 
--- | A PTY session in the guest.
-interactive :: Runtime -> Array String -> Aff Int
-interactive (Vm box) argv = Sandbox.execInteractive argv box
-interactive (Container name) argv = Docker.dockerAttached ([ "exec", "-it", name ] <> argv)
+-- | A PTY session with the database: in the guest, or, when the server
+-- | image has no CLIs, in a helper container sharing the data branch.
+interactive :: Profile -> State -> Runtime -> Array String -> Aff Int
+interactive _ _ (Vm box) argv = Sandbox.execInteractive argv box
+interactive p st (Container name) argv = Engine.toolImage p >>= case _ of
+  Nothing -> Docker.dockerAttached ([ "exec", "-it", name ] <> argv)
+  Just image -> Docker.dockerAttached ([ "run", "--rm", "-it", "-v", Engine.mountPoint p st.branch <> ":" <> p.dataDir Linux, image ] <> argv)
 
 -- | A command with the terminal's stdin, stdout and stderr bound to it.
 attached :: Runtime -> Boolean -> Array String -> Aff Int
@@ -526,7 +529,7 @@ status p = do
 shell :: Profile -> Aff Int
 shell p = requireRunning p >>= _.runtime >>> case _ of
   Vm box -> Sandbox.shell box
-  rt@(Container _) -> interactive rt [ "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh" ]
+  Container name -> Docker.dockerAttached [ "exec", "-it", name, "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh" ]
 
 exec :: Profile -> { tty :: Boolean, command :: Array String } -> Aff Int
 exec p o = do
@@ -670,7 +673,7 @@ client p = do
   { runtime, state: st } <- requireRunning p
   os <- stateOs st
   case p.client of
-    Guest argv -> interactive runtime (argv os (creds st))
+    Guest argv -> interactive p st runtime (argv os (creds st))
     Host argv -> do
       node <- liftEffect Native.nodePath
       root <- liftEffect Native.toolRoot
@@ -692,7 +695,7 @@ fancy p = do
   { runtime, state: st } <- requireRunning p
   os <- stateOs st
   case p.fancy.cmd of
-    GuestTool argv -> interactive runtime (argv os (creds st))
+    GuestTool argv -> interactive p st runtime (argv os (creds st))
     HostTool argv -> do
       runner <- pythonRunner
       Native.spawnInherit runner.cmd (runner.args <> argv (creds st) st.port) Object.empty

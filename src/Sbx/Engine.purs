@@ -14,6 +14,7 @@ module Sbx.Engine
   , removeContainer
   , pullImage
   , runContainer
+  , toolImage
   ) where
 
 import Prelude
@@ -31,6 +32,7 @@ import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Exception (error)
 import Foreign.Object as Object
+import Sbx.Native as Native
 import Sbx.Profile (Creds, Os(..), Profile)
 import Sbx.State (State)
 
@@ -151,3 +153,22 @@ runContainer p st c = do
       ] <> env <> [ p.image st.version ] <> fromMaybe [] p.command
   r <- Docker.docker args
   unless (r.exitCode == 0) $ throwError (error ("docker run: " <> String.trim r.stderr))
+
+-- | The profile's helper image for the CLIs, built in the engine the first
+-- | time from its inline Dockerfile (a context directory under the tool's
+-- | config dir; the engine keeps the image).
+toolImage :: Profile -> Aff (Maybe String)
+toolImage p = case p.tools of
+  Nothing -> pure Nothing
+  Just t -> do
+    have <- Docker.docker [ "image", "inspect", t.image ] <#> (_.exitCode >>> eq 0)
+    unless have do
+      say ("Building the " <> t.image <> " image (sqlite3 and friends) in the engine ...")
+      dir <- liftEffect do
+        d <- Native.configDir p.tool <#> \c -> Native.pathJoin c "tools"
+        Native.mkdirp d
+        Native.writeText (Native.pathJoin d "Dockerfile") t.dockerfile
+        pure d
+      code <- Docker.dockerAttached [ "build", "-t", t.image, dir ]
+      unless (code == 0) $ throwError (error ("docker build " <> t.image <> " failed"))
+    pure (Just t.image)
