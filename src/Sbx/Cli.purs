@@ -73,7 +73,7 @@ osReader = eitherReader \s -> maybe (Left ("expected linux, freebsd or netbsd, g
 startP :: Profile -> Parser Command
 startP p = ado
   os <- optional $ argument osReader $ fold
-    [ metavar "linux|freebsd|netbsd", help "Guest OS (default: linux)" ]
+    [ metavar "linux|freebsd|netbsd", help "Guest OS (default: linux, a container in the shared Docker engine VM; the BSDs get a VM each)" ]
   version <- optional $ strArgument $ fold
     [ metavar "VERSION", help ("Linux: image tag, e.g. " <> p.defaultTag <> " or " <> p.defaultTag <> "-alpine, or a full image reference (default: " <> p.defaultTag <> "). FreeBSD/NetBSD: OS release, e.g. 15.1 or 10.1 (default: latest)") ]
   port <- optional $ option int $ fold
@@ -82,8 +82,8 @@ startP p = ado
   password <- credential "password" ("Its password (default: " <> p.defaults.password <> ")")
   db <- optional $ strOption $ fold
     [ long "db", metavar "NAME", help ("Database created on first start (default: " <> p.defaults.db <> ")") ]
-  cpus <- optional $ option int $ fold [ long "cpus", metavar "N", help "vCPUs (default: 2)" ]
-  mem <- optional $ option int $ fold [ long "mem", metavar "MIB", help "Guest RAM in MiB (default: 1024)" ]
+  cpus <- optional $ option int $ fold [ long "cpus", metavar "N", help "vCPUs of the VM (BSD guests; default: 2). Not applied on Linux, where the shared engine VM is sized with `bsdkrun docker start`" ]
+  mem <- optional $ option int $ fold [ long "mem", metavar "MIB", help "Guest RAM in MiB (BSD guests; default: 1024). Not applied on Linux" ]
   branch <- optional $ strOption $ fold
     [ long "branch", short 'b', metavar "BRANCH", help "Data branch to mount (default: the current one, main at first)" ]
   size <- optional $ strOption $ fold
@@ -183,7 +183,7 @@ commands p = case p.migrations of
             ]
         , command "stop" $ info (pure Stop) $ progDesc "Stop the VM (data stays on its branch)"
         , command "status" $ info (pure Status) $ progDesc "Show the VM, the mounted branch and the connection URL"
-        , command "ssh" $ info (pure Shell) $ progDesc "Open a shell in the VM (alias: shell)"
+        , command "ssh" $ info (pure Shell) $ progDesc "Open a shell in the VM, or in the container on Linux (alias: shell)"
         , command "exec" $ info (helper <*> execP) $ fold
             [ progDesc "Run a command in the VM with your stdin, stdout and stderr bound to it"
             , footer ("Example: " <> p.tool <> " exec -t sh, " <> p.tool <> " exec " <> "psql -U postgres" <> " -c \"select 1\"")

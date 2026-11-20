@@ -120,6 +120,19 @@ Credentials and the database are applied when a data branch is first
 initialised: on Linux through the image's `POSTGRES_*` environment, on BSD by
 the provisioning script.
 
+On Linux the server is a **container in bsdkrun's shared Docker engine VM**
+(`bsdkrun-docker`), not a VM of its own: one VM serves every Linux sandbox on
+the host, and a second database costs a container. `start` creates the engine
+the first time (2 vCPU, 2048 MiB; `bsdkrun docker start --cpus N --mem M`
+sizes it), attaches the data volume to it (a new disk needs the engine
+restarted once; its other containers come back by themselves), and runs
+`postgres:18` with the branch bind-mounted at the data directory and the host port
+published on 127.0.0.1. The container is disposable and recreated from the
+recorded settings whenever `--port` or the branch change; `stop` stops the
+container only, the engine stays for the others. `--cpus` and `--mem` size a
+BSD VM and are not applied to the container: the engine's kernel has no CPU
+scheduler limits, so the engine's own size is the limit.
+
 On FreeBSD and NetBSD the root disk is grown to make room for the packages
 (NetBSD reboots once after resizing; `start` rides that out), then the first
 start installs the server with `pkg` / `pkgin` (bootstrapped from the pkgsrc

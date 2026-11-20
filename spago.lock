@@ -679,7 +679,7 @@
     "extra_packages": {
       "bsdkrun": {
         "git": "https://github.com/tsirysndr/bsdkrun-purescript.git",
-        "ref": "d319f59be2eb1885185d58e8c558a8b69e1339a5"
+        "ref": "12307006922b696126e277f7e96ef27397dc32ae"
       }
     }
   },
@@ -765,7 +765,7 @@
     "bsdkrun": {
       "type": "git",
       "url": "https://github.com/tsirysndr/bsdkrun-purescript.git",
-      "rev": "d319f59be2eb1885185d58e8c558a8b69e1339a5",
+      "rev": "12307006922b696126e277f7e96ef27397dc32ae",
       "dependencies": [
         "aff",
         "argonaut-core",
