@@ -21,9 +21,7 @@ server runs inside the VM; everything else (Studio, drizzle-kit, pgroll, pgcli)
 runs on the host and talks to it over a forwarded port.
 
 Written in PureScript on the [bsdkrun PureScript
-SDK](https://github.com/tsirysndr/bsdkrun-purescript). Siblings:
-[mariadb-sbx](../mariadb-sbx) and [sqlite-sbx](../sqlite-sbx) share the same
-code and commands.
+SDK](https://github.com/tsirysndr/bsdkrun-purescript).
 
 ## Requirements
 
