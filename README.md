@@ -15,7 +15,7 @@ postgres-sbx checkout main         # back to the untouched data
 postgres-sbx branch -d feature     # done with it
 ```
 
-One sandbox per tool: a VM named `postgres-sbx`, a ZFS volume named
+One parent sandbox per tool, with parallel branch instances: a VM named `postgres-sbx`, a ZFS volume named
 `postgres-sbx`, and a small state file under `~/.config/postgres-sbx`. The
 server runs inside the VM; everything else (Studio, drizzle-kit, pgroll, pgcli)
 runs on the host and talks to it over a forwarded port.
@@ -146,7 +146,7 @@ are ZFS clones: forking is instant and costs nothing until the branches diverge.
 
 ```sh
 postgres-sbx branch                 # list; * marks the mounted one (also: branch ls)
-postgres-sbx branch staging         # fork the current branch (no switch)
+postgres-sbx branch staging         # fork and start a parallel instance
 postgres-sbx branch hotfix --from main
 postgres-sbx checkout staging       # stop, remount, start: ~40s on Linux
 postgres-sbx checkout -b try-this   # fork and switch in one go
@@ -252,6 +252,52 @@ dialect, pgroll. `Sbx.App`, `Sbx.Cli`, `Sbx.Native`, `Sbx.State` and
 
 MIT license.
 
+## Parallel branches
+
+`postgres-sbx branch NAME` clones the data with ZFS copy-on-write and starts a
+parallel instance. The original keeps running and remains selected. Forks
+inherit the source's OS, version, database and credentials; later writes stay
+inside their own dataset. You can fork a fork with `--from`.
+
+```sh
+postgres-sbx branch feature
+postgres-sbx branch experiment --from feature
+postgres-sbx branch staging --port 15432
+postgres-sbx --branch feature url
+postgres-sbx --branch feature status
+postgres-sbx --branch feature stop
+postgres-sbx --branch feature start
+postgres-sbx checkout feature       # select its server; the others keep running
+postgres-sbx checkout main
+postgres-sbx branch -d experiment   # stop its instance and delete its dataset
+```
+
+The allocator skips occupied host ports and ports reserved by stopped instances.
+BSD server forks also check guest listeners. `--port` selects an explicit port;
+collisions fail before a new dataset is created. A stopped fork retains its
+port, and a busy port on restart is reported rather than silently connecting
+to another service. Put the global `--branch NAME` option **before** the command
+to target an instance without changing your selection.
+
+Linux instances are separate containers in the shared Docker VM, each mounting
+only its own dataset. FreeBSD/NetBSD instances use separate PostgreSQL or MariaDB
+processes inside the existing BSD VM, with separate data directories, ports,
+PID files, sockets and logs. One VM owns the ZFS pool: the disk is never imported
+into multiple VMs at once. Platform support is unchanged: DuckDB on BSD remains
+embedded file access, and SQLite's available engines remain Linux-only.
+
+`checkout` selects an existing parallel instance; for branches without an
+instance it retains the original parent-server mount-switching behavior.
+`checkout -b NAME` retains that behavior too. `branch` lists datasets and parallel
+instances with their status and ports. `branch -d NAME` removes only that fork;
+`destroy` removes the parent sandbox and all its parallel instances. A failed
+fork startup retains its data and settings so `--branch NAME start` can retry.
+
+Snapshots of running databases are crash-consistent. The fork performs normal
+WAL/redo recovery on startup; it does not copy the source process's locks or run
+a second server over the same writable directory. This provides independent
+data, not a security boundary between processes sharing a BSD VM.
+
 ## CI and releases
 
 Local test commands require Bun in addition to Node.js and the PureScript tools.
@@ -267,7 +313,9 @@ are uploaded even on failure. Live tests require KVM and are never skipped.
 npm ci
 npm test
 npm run build:bin
-npm run test:e2e                # installed bsdkrun >= 0.12.1 and Docker CLI
+npm run test:e2e                # Linux containers; installed bsdkrun >= 0.12.1 and Docker CLI
+SBX_E2E_OS=freebsd npm run test:e2e
+SBX_E2E_OS=netbsd npm run test:e2e
 fluentci run test unit          # FluentCI 0.17.8
 fluentci run --workflow test    # Ubuntu x86_64, sudo and /dev/kvm; installs bsdkrun
 ```
