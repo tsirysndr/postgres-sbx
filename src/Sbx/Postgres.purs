@@ -12,7 +12,7 @@ profile =
   { tool: "postgres-sbx"
   , product: "PostgreSQL"
   , guestPort: 5432
-  , defaultTag: "17"
+  , defaultTag: "18"
   , image: \tag -> if String.contains (String.Pattern "/") tag || String.contains (String.Pattern ":") tag then tag else "postgres:" <> tag
   , hasCredentials: true
   , defaults: { user: "postgres", password: "postgres", db: "postgres" }
@@ -76,10 +76,10 @@ freebsd :: String
 freebsd = String.joinWith "\n"
   [ "set -e"
   , "export PATH=/usr/local/bin:/usr/local/sbin:$PATH"
-  , "pkg info -e postgresql17-server >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg install -y postgresql17-server"
+  , "pkg info -e postgresql18-server >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg install -y postgresql18-server"
   , "sysrc postgresql_enable=YES >/dev/null"
   , "chown postgres:postgres /var/db/postgres"
-  , "data=/var/db/postgres/data17"
+  , "data=/var/db/postgres/data18"
   , "if [ ! -f \"$data/PG_VERSION\" ]; then"
   , "  service postgresql initdb >/dev/null"
   , "  echo \"listen_addresses = '*'\" >> \"$data/postgresql.conf\""
@@ -94,7 +94,7 @@ netbsd :: String
 netbsd = String.joinWith "\n"
   [ "set -e"
   , "export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH"
-  , "pkg_info -qe postgresql17-server || pkgin -y install postgresql17-server"
+  , "pkg_info -qe postgresql18-server || pkgin -y install postgresql18-server"
   , "cp -f /usr/pkg/share/examples/rc.d/pgsql /etc/rc.d/pgsql"
   , "grep -q '^pgsql=YES' /etc/rc.conf || echo 'pgsql=YES' >> /etc/rc.conf"
   , "chown pgsql:pgsql /var/pgsql"

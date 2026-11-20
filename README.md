@@ -7,7 +7,7 @@ Studio, drizzle-kit, [pgroll](https://pgroll.com) migrations, `psql` and
 [pgcli](https://www.pgcli.com) are all wired to it.
 
 ```sh
-postgres-sbx start                 # boots PostgreSQL 17 in a VM, port 5432 on 127.0.0.1
+postgres-sbx start                 # boots PostgreSQL 18 in a VM, port 5432 on 127.0.0.1
 postgres-sbx checkout -b feature   # fork the data, mount the fork
 postgres-sbx migrate up            # try a pgroll migration on it
 postgres-sbx studio                # look at it in Drizzle Studio
@@ -90,11 +90,11 @@ Every command has `--help`.
 ## Starting
 
 ```sh
-postgres-sbx start                              # linux, postgres:17
+postgres-sbx start                              # linux, postgres:18
 postgres-sbx start linux 16-alpine              # any tag of the postgres image
 postgres-sbx start linux ghcr.io/you/pg:dev     # or a full image reference
-postgres-sbx start freebsd 15.1                 # PostgreSQL 17 from pkg
-postgres-sbx start netbsd                       # PostgreSQL 17 from pkgsrc
+postgres-sbx start freebsd 15.1                 # PostgreSQL 18 from pkg
+postgres-sbx start netbsd                       # PostgreSQL 18 from pkgsrc
 ```
 
 | Option | Default | |
