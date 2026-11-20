@@ -356,7 +356,8 @@ status p = do
           row "status" "STOPPED"
           row "vm" "not created (state recorded; `start` recreates it)"
         Just m -> do
-          let exited = maybe "" (\code -> if code == 0 then "" else " (exited with " <> show code <> ")") (toMaybe m.exitCode)
+          -- 143 is SIGTERM: what `stop` sends, not a failure.
+          let exited = maybe "" (\code -> if code == 0 || code == 143 then "" else " (exited with " <> show code <> ")") (toMaybe m.exitCode)
           row "status" (if m.running then paint "36" "RUNNING" else "STOPPED" <> exited)
           row "vm" (m.id <> ", " <> maybe m.image (describe p) st <> ", " <> show m.cpus <> " vCPU / " <> show m.mem <> " MiB")
       for_ st \s -> row "port" (portOf s)
