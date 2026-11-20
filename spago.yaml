@@ -33,4 +33,4 @@ workspace:
       # The bsdkrun PureScript SDK, pinned to a commit. For local SDK work,
       # swap in:   path: ../bsdkrun-purescript
       git: https://github.com/tsirysndr/bsdkrun-purescript.git
-      ref: c3db745a821bdd04a0d3f04bf6667da6c38c9ade
+      ref: d319f59be2eb1885185d58e8c558a8b69e1339a5
