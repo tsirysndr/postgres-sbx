@@ -68,6 +68,7 @@ start      Start the sandbox, creating the VM and its data volume on first run
 stop       Stop the VM (data stays on its branch)
 status     Show the VM, the mounted branch and the connection URL
 ssh        Open a shell in the VM (alias: shell)
+exec       Run a command in the VM with your stdin, stdout and stderr bound to it (-t for a PTY)
 log        Show the VM console log, -f to follow (alias: logs)
 branch     List data branches, create one (copy-on-write) or delete one
 checkout   Switch the data directory to BRANCH, -b to create it first (alias: switch)
@@ -107,17 +108,22 @@ postgres-sbx start netbsd                       # PostgreSQL 18 from pkgsrc
 | `--mem MIB` | 1024 | changeable on a later start |
 | `--branch, -b BRANCH` | the current one | data branch to mount |
 | `--size SIZE` | 10G | data volume size when it is created (sparse) |
+| `-d, --detach` | off | quiet start: no VM console or provisioning output, only the status lines |
 
 The first `start` creates the volume and the VM and waits for the server to
 accept connections. Later starts resume the same VM; the OS, version and credentials are fixed
 for the life of the sandbox (`destroy` to change them), while `--port`,
 `--cpus` and `--mem` can be changed on any start.
+While it starts, the VM console and, on BSD, the package installation stream
+to the terminal; `start -d` keeps the start quiet.
 Credentials and the database are applied when a data branch is first
 initialised: on Linux through the image's `POSTGRES_*` environment, on BSD by
 the provisioning script.
 
-On FreeBSD and NetBSD the first start installs the server with `pkg` /
-`pkgin`, runs `initdb` on the data branch, opens `listen_addresses` and
+On FreeBSD and NetBSD the root disk is grown to make room for the packages
+(NetBSD reboots once after resizing; `start` rides that out), then the first
+start installs the server with `pkg` / `pkgin` (bootstrapped from the pkgsrc
+CDN on a fresh NetBSD guest), runs `initdb` on the data branch, opens `listen_addresses` and
 `pg_hba.conf` for the host, and creates the role and database. The same script
 runs on every start and is idempotent. These guests are scripted but have had
 less exercise than Linux; `postgres-sbx log` shows what happened.

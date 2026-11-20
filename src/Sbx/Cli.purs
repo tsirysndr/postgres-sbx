@@ -29,6 +29,7 @@ type StartOpts =
   , mem :: Maybe Int
   , branch :: Maybe String
   , size :: Maybe String
+  , detach :: Boolean -- ^ quiet start: no VM console or provisioning output
   }
 
 type BranchOpts = { name :: Maybe String, arg :: Maybe String, delete :: Boolean, from :: Maybe String }
@@ -38,6 +39,7 @@ data Command
   | Stop
   | Status
   | Shell
+  | Exec { tty :: Boolean, command :: Array String }
   | Logs { follow :: Boolean, boot :: Boolean }
   | Branch BranchOpts
   | Checkout { name :: String, create :: Boolean }
@@ -86,7 +88,9 @@ startP p = ado
     [ long "branch", short 'b', metavar "BRANCH", help "Data branch to mount (default: the current one, main at first)" ]
   size <- optional $ strOption $ fold
     [ long "size", metavar "SIZE", help "Data volume size when it is created, e.g. 10G (sparse; default: 10G)" ]
-  in Start { os, version, port, user, password, db, cpus, mem, branch, size }
+  detach <- switch $ fold
+    [ long "detach", short 'd', help "Quiet start: do not stream the VM console and the provisioning output" ]
+  in Start { os, version, port, user, password, db, cpus, mem, branch, size, detach }
   where
   credential name doc
     | p.hasCredentials = optional $ strOption $ fold [ long name, metavar (if name == "user" then "NAME" else "SECRET"), help doc ]
@@ -117,6 +121,12 @@ studioP = ado
   port <- option int $ fold [ long "port", metavar "PORT", value 4983, help "Port Drizzle Studio's server listens on (default: 4983)" ]
   host <- strOption $ fold [ long "host", metavar "HOST", value "127.0.0.1", help "Address it binds (default: 127.0.0.1)" ]
   in Studio { port, host }
+
+execP :: Parser Command
+execP = ado
+  tty <- switch $ fold [ long "tty", short 't', help "Allocate a pseudo-terminal (for shells, editors and prompts)" ]
+  command <- many $ strArgument $ fold [ metavar "CMD...", help "The command and its arguments, run as root through the guest agent" ]
+  in Exec { tty, command: Array.fromFoldable command }
 
 destroyP :: Parser Command
 destroyP = ado
@@ -174,6 +184,11 @@ commands p = case p.migrations of
         , command "stop" $ info (pure Stop) $ progDesc "Stop the VM (data stays on its branch)"
         , command "status" $ info (pure Status) $ progDesc "Show the VM, the mounted branch and the connection URL"
         , command "ssh" $ info (pure Shell) $ progDesc "Open a shell in the VM (alias: shell)"
+        , command "exec" $ info (helper <*> execP) $ fold
+            [ progDesc "Run a command in the VM with your stdin, stdout and stderr bound to it"
+            , footer ("Example: " <> p.tool <> " exec -t sh, " <> p.tool <> " exec " <> "psql -U postgres" <> " -c \"select 1\"")
+            , forwardOptions
+            ]
         , command "log" $ info (helper <*> logsP) $ progDesc "Show the VM console log, -f to follow (alias: logs)"
         , command "branch" $ info (helper <*> branchP) $ fold
             [ progDesc "List data branches, create one (copy-on-write) or delete one"
@@ -217,11 +232,18 @@ commands p = case p.migrations of
         ]
     )
 
+-- | The out-of-the-box choices, for the top-level help.
+defaultsLine :: Profile -> String
+defaultsLine p = "Defaults: linux " <> p.image p.defaultTag <> ", host port " <> show p.guestPort <> " on 127.0.0.1, 2 vCPU, 1024 MiB, data volume 10G"
+  <> (if p.hasCredentials then ", user " <> p.defaults.user <> ", password " <> p.defaults.password <> ", database " <> p.defaults.db else "")
+  <> ". `start --help` lists the flags that change them."
+
 parseCommand :: Profile -> String -> Effect Command
 parseCommand p version = customExecParser (prefs showHelpOnEmpty) $ info (helper <*> versionOption <*> commands p) $ fold
   [ fullDesc
   , header (p.tool <> " — " <> p.product <> " in a bsdkrun microVM, with branchable data")
   , progDesc ("One " <> p.product <> " server per sandbox, running in a lightweight VM. Its data directory is a ZFS branch: fork it copy-on-write, switch between branches, throw them away. Drizzle Studio and drizzle-kit are wired to it.")
+  , footer (defaultsLine p)
   ]
   where
   versionOption = infoOption (p.tool <> " " <> version) $ fold [ long "version", help "Show the version" ]

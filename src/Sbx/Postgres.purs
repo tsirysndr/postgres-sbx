@@ -24,6 +24,11 @@ profile =
       FreeBSD -> "/var/db/postgres"
       NetBSD -> "/var/pgsql"
   , rootfsVolume: false
+  -- The pkg/pkgsrc server packages (llvm for JIT among them) need about
+  -- 2 GiB beyond the base image's root disk.
+  , rootDisk: case _ of
+      Linux -> Nothing
+      _ -> Just "10G"
   , env: \c -> Object.fromFoldable
       [ "POSTGRES_USER" /\ c.user
       , "POSTGRES_PASSWORD" /\ c.password
@@ -77,7 +82,10 @@ freebsd = String.joinWith "\n"
   [ "set -e"
   , "export PATH=/usr/local/bin:/usr/local/sbin:$PATH"
   , "pkg info -e postgresql18-server >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg install -y postgresql18-server"
-  , "sysrc postgresql_enable=YES >/dev/null"
+  , "pkg clean -ay >/dev/null 2>&1 || true"
+  -- Not enabled at boot: rc would start it before bsdkrun mounts the ZFS
+  -- branch, on the bare mountpoint. Provisioning starts it after the mount.
+  , "sysrc -x postgresql_enable >/dev/null 2>&1 || true"
   , "chown postgres:postgres /var/db/postgres"
   , "data=/var/db/postgres/data18"
   , "if [ ! -f \"$data/PG_VERSION\" ]; then"
@@ -85,26 +93,43 @@ freebsd = String.joinWith "\n"
   , "  echo \"listen_addresses = '*'\" >> \"$data/postgresql.conf\""
   , "  printf 'host all all 0.0.0.0/0 scram-sha-256\\nhost all all ::/0 scram-sha-256\\n' >> \"$data/pg_hba.conf\""
   , "fi"
-  , "service postgresql status >/dev/null 2>&1 || service postgresql start >/dev/null"
+  , "service postgresql onestatus >/dev/null 2>&1 || service postgresql onestart >/dev/null"
   , sql
-  , "su -m postgres -c 'psql -q -v ON_ERROR_STOP=1 -f /tmp/sbx.sql'"
+  , "su -m postgres -c 'psql -q -v ON_ERROR_STOP=1 -d postgres -f /tmp/sbx.sql'"
   ]
 
 netbsd :: String
 netbsd = String.joinWith "\n"
   [ "set -e"
   , "export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH"
+  -- A fresh guest has pkg_add but no pkgin, and no PKG_PATH: point pkg_add
+  -- at the pkgsrc CDN for this release (a -current guest uses its <major>.0
+  -- packages, with a harmless platform warning) and install pkgin with it.
+  , "A=$(uname -p); [ \"$A\" = x86_64 ] && A=amd64"
+  , "export PKG_PATH=\"https://cdn.NetBSD.org/pub/pkgsrc/packages/NetBSD/$A/$(uname -r | cut -d. -f1).0/All/\""
+  , "command -v pkgin >/dev/null 2>&1 || pkg_add pkgin"
   , "pkg_info -qe postgresql18-server || pkgin -y install postgresql18-server"
+  , "pkgin clean >/dev/null 2>&1 || true"
   , "cp -f /usr/pkg/share/examples/rc.d/pgsql /etc/rc.d/pgsql"
-  , "grep -q '^pgsql=YES' /etc/rc.conf || echo 'pgsql=YES' >> /etc/rc.conf"
+  -- Not enabled at boot: rc would start it before bsdkrun mounts the ZFS
+  -- branch and initdb on the bare mountpoint. Provisioning starts it after
+  -- the mount.
+  , "{ grep -v '^pgsql=YES' /etc/rc.conf || true; } > /etc/rc.conf.new && mv /etc/rc.conf.new /etc/rc.conf"
+  -- pkgsrc's rc script keeps the cluster under pgsql_home (/usr/pkg/pgsql by
+  -- default): point it at the ZFS branch.
+  , "grep -q '^pgsql_home=' /etc/rc.conf || echo 'pgsql_home=/var/pgsql' >> /etc/rc.conf"
+  -- NetBSD ships 10 semaphore sets / 60 semaphores; PostgreSQL needs more
+  -- than that for its default max_connections.
+  , "sysctl -w kern.ipc.semmni=256 kern.ipc.semmns=4096 >/dev/null"
+  , "grep -q '^kern.ipc.semmni' /etc/sysctl.conf || printf 'kern.ipc.semmni=256\\nkern.ipc.semmns=4096\\n' >> /etc/sysctl.conf"
   , "chown pgsql:pgsql /var/pgsql"
   , "data=/var/pgsql/data"
   , "if [ ! -f \"$data/PG_VERSION\" ]; then"
-  , "  /etc/rc.d/pgsql initdb >/dev/null"
+  , "  /etc/rc.d/pgsql oneinitdb >/dev/null"
   , "  echo \"listen_addresses = '*'\" >> \"$data/postgresql.conf\""
   , "  printf 'host all all 0.0.0.0/0 scram-sha-256\\nhost all all ::/0 scram-sha-256\\n' >> \"$data/pg_hba.conf\""
   , "fi"
-  , "/etc/rc.d/pgsql status >/dev/null 2>&1 || /etc/rc.d/pgsql start >/dev/null"
+  , "/etc/rc.d/pgsql onestatus >/dev/null 2>&1 || /etc/rc.d/pgsql onestart >/dev/null"
   , sql
-  , "su -m pgsql -c 'psql -q -v ON_ERROR_STOP=1 -f /tmp/sbx.sql'"
+  , "su -m pgsql -c 'psql -q -v ON_ERROR_STOP=1 -d postgres -f /tmp/sbx.sql'"
   ]

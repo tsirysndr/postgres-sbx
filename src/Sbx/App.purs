@@ -7,6 +7,7 @@ import Bsdkrun as B
 import Bsdkrun.Exec as Exec
 import Bsdkrun.Host as Host
 import Bsdkrun.Options as Options
+import Bsdkrun.Port as Port
 import Bsdkrun.Sandbox as Sandbox
 import Bsdkrun.Types (Sandbox, SandboxInfo, ZfsVolumeInfo)
 import Bsdkrun.Zfs as Zfs
@@ -21,7 +22,7 @@ import Data.Nullable (toMaybe)
 import Data.String as String
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple.Nested ((/\))
-import Effect.Aff (Aff, attempt, delay)
+import Effect.Aff (Aff, attempt, delay, finally, forkAff, killFiber)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Exception (error, message)
@@ -38,6 +39,7 @@ run p = case _ of
   Stop -> stop p
   Status -> status p
   Shell -> shell p
+  Exec o -> exec p o
   Logs o -> logs p o
   Branch o -> branch p o
   Checkout o -> checkout p o
@@ -126,22 +128,99 @@ waitReady p os c box = do
 
 -- | The profile's setup script, if any: idempotent, run as root through the
 -- | agent on every start (the first run installs packages).
-provision :: Profile -> Os -> Creds -> Sandbox -> Aff Unit
-provision p os c box = for_ (p.provision os) \script -> do
-  waitFor "the guest agent" 180 do
-    alive <- B.isRunning box
-    unless alive $ fail ("the VM exited at boot; `" <> p.tool <> " log --boot` says why")
-    probe [ "sh", "-c", "true" ] box
+provision :: Profile -> Boolean -> Os -> Creds -> Sandbox -> Aff Unit
+provision p stream os c box = for_ (p.provision os) \script -> do
+  waitAgent p os box
+  waitMounted p os box
   say ("Preparing " <> p.product <> " on " <> osName os <> " (the first time installs packages, which takes a minute or two) ...")
   let
     env = Object.fromFoldable [ "SBX_USER" /\ c.user, "SBX_PASSWORD" /\ c.password, "SBX_DB" /\ c.db ]
-    opts = Exec.options # Exec.withEnv env # Exec.withStdout Native.writeStdout # Exec.withStderr Native.writeStderr
+    opts = Exec.options # Exec.withEnv env
+      # (if stream then Exec.withStdout Native.writeStdout >>> Exec.withStderr Native.writeStderr else identity)
   r <- B.execWith [ "sh", "-c", script ] opts box
-  unless (r.exitCode == 0) $ fail ("provisioning failed with exit " <> show r.exitCode)
+  unless (r.exitCode == 0) do
+    -- Quiet starts keep the output for the failure report.
+    unless stream $ say (String.trim (r.stdout <> "\n" <> r.stderr))
+    fail ("provisioning failed with exit " <> show r.exitCode)
 
--- | Everything between a booted VM and a usable server.
-bringUp :: Profile -> Os -> Creds -> Sandbox -> Aff Unit
-bringUp p os c box = provision p os c box *> waitReady p os c box
+-- | Wait for the guest agent. A BSD guest whose root disk was just grown
+-- | resizes its file system and reboots (NetBSD does), which a detached
+-- | machine reports as a clean exit: boot it again, once.
+waitAgent :: Profile -> Os -> Sandbox -> Aff Unit
+waitAgent p os box = go (isJust (p.rootDisk os)) 0
+  where
+  go mayReboot n
+    | n >= 180 = fail "the guest agent did not come up within 180s"
+    | otherwise = B.status box >>= case _ of
+        Just m | m.running -> do
+          ok <- probe [ "sh", "-c", "true" ] box
+          unless ok (delay (Milliseconds 1000.0) *> go mayReboot (n + 1))
+        Just m | mayReboot, maybe true (_ == 0) (toMaybe m.exitCode) -> do
+          say "The guest grew its root disk and rebooted; starting it again ..."
+          for_ m.ports \f -> ensurePort p f.host
+          void (B.start box)
+          go false 0
+        _ -> fail ("the VM exited at boot; `" <> p.tool <> " log --boot` says why")
+
+-- | bsdkrun imports a machine's ZFS volumes from a hook that runs beside the
+-- | boot once the agent answers: wait for the data branch to be mounted. A
+-- | fresh NetBSD guest gets its ZFS modules installed by that hook and can
+-- | only load them at boot, so it is restarted once when the mount does not
+-- | come: right away once the modules are in place, else after the wait.
+waitMounted :: Profile -> Os -> Sandbox -> Aff Unit
+waitMounted p os box = go (os == NetBSD)
+  where
+  dir = p.dataDir os
+  mounted = probe [ "sh", "-c", "mount | grep -q ' on " <> dir <> " '" ] box
+  modulesInstalledButNotLoaded = do
+    m <- B.status box
+    prepared <- maybe (pure false) (\i -> liftEffect (Native.fileExists (Native.pathJoin i.stateDir "zfs-netbsd-ready"))) m
+    if not prepared then pure false else not <$> probe [ "sh", "-c", "modstat | grep -q '^zfs '" ] box
+  go mayRestart = do
+    outcome <- attempt $ waitFor ("the data branch at " <> dir) 90 do
+      up <- mounted
+      if up then pure true
+      else if mayRestart then modulesInstalledButNotLoaded >>= \restart -> if restart then throwError (error "restart") else pure false
+      else pure false
+    case outcome of
+      Right _ -> pure unit
+      Left e
+        | mayRestart -> do
+            say "NetBSD now loads ZFS at boot: restarting the VM to import the data branch ..."
+            void (B.stop box)
+            B.status box >>= \m -> for_ m \i -> for_ i.ports \f -> ensurePort p f.host
+            void (B.start box)
+            waitAgent p os box
+            go false
+        | otherwise -> throwError e
+
+-- | The forwarded host port must be free before the VM boots. A gvproxy left
+-- | behind by a machine that is gone (bsdkrun does not reap it on stop or
+-- | exit) is removed; anything else is reported with a way out.
+ensurePort :: Profile -> Int -> Aff Unit
+ensurePort p port = do
+  free <- Port.isFreeOn "127.0.0.1" port
+  unless free do
+    reaped <- liftEffect (Native.reapOrphanGvproxies port)
+    unless (Array.null reaped) $ say ("Port " <> show port <> " was held by a gvproxy left behind by a machine that is gone (pid " <> String.joinWith ", " (map show reaped) <> "); removed it")
+    delay (Milliseconds 500.0)
+    free' <- Port.isFreeOn "127.0.0.1" port
+    unless free' $ fail ("host port " <> show port <> " is in use; pick another with `" <> p.tool <> " start --port PORT`")
+
+-- | Everything between a booted VM and a usable server. With `stream`, the
+-- | provisioning output shows on the terminal; `start -d` turns that off.
+bringUp :: Profile -> Boolean -> Os -> Creds -> Sandbox -> Aff Unit
+bringUp p stream os c box = provision p stream os c box *> waitReady p os c box
+
+-- | Run an action while the VM console streams to the terminal (`start -d`
+-- | skips it): everything the console holds for a VM just created, only what
+-- | comes next for a restart, so the previous boot is not replayed. The
+-- | follower is killed once the action is over.
+withConsole :: Boolean -> Boolean -> Sandbox -> Aff Unit -> Aff Unit
+withConsole false _ _ act = act
+withConsole true fromStart box act = do
+  follower <- forkAff (void (attempt (Sandbox.streamConsole fromStart box)))
+  finally (killFiber (error "console stream closed") follower) act
 
 ready :: Profile -> State -> Aff Unit
 ready p st = do
@@ -193,10 +272,12 @@ start p o = do
                 void (B.update cpus mem box)
                 liftEffect (State.save p.tool s { cpus = cpus, mem = mem })
               say ("Starting " <> p.tool <> " (" <> m.id <> ") ...")
-              void (B.start box)
               s' <- requireState p
               os <- stateOs s'
-              bringUp p os (creds s') box
+              ensurePort p s'.port
+              withConsole (not o.detach) false box do
+                void (B.start box)
+                bringUp p (not o.detach) os (creds s') box
               ready p s'
               pure 0
     Just m, Nothing -> fail ("a machine named '" <> p.tool <> "' exists (" <> m.id <> ") but this tool did not record it; remove it with `bsdkrun rm -f " <> m.id <> "` or `" <> p.tool <> " destroy`")
@@ -222,12 +303,13 @@ start p o = do
       fail ("no branch '" <> branchName <> "'; branches: " <> String.joinWith ", " (branchNames vol))
     let
       bsdVersion = if version == "" then identity else Options.withVersion version
+      rootDisk os' = maybe identity Options.withDiskSize (p.rootDisk os')
       base = case os of
         Linux -> Options.linux (p.image version) # Options.withEnv (p.env c)
           # (if p.rootfsVolume then Options.withVolume (rootfsVolume p) else identity)
           # maybe identity Options.withCommand p.command
-        FreeBSD -> Options.freebsd # bsdVersion
-        NetBSD -> Options.netbsd # bsdVersion
+        FreeBSD -> Options.freebsd # bsdVersion # rootDisk FreeBSD
+        NetBSD -> Options.netbsd # bsdVersion # rootDisk NetBSD
       opts = base
         # Options.withName p.tool
         # Options.withCpus cpus
@@ -236,10 +318,11 @@ start p o = do
         # Options.withZfs [ Zfs.target p.tool (Just branchName) <> ":" <> p.dataDir os ]
       st = { os: osName os, version, port, user: c.user, password: c.password, db: c.db, branch: branchName, cpus, mem }
     say ("Creating " <> describe p st <> " VM '" <> p.tool <> "' with branch " <> branchName <> " at " <> p.dataDir os <> " (" <> show cpus <> " vCPU, " <> show mem <> " MiB) ...")
+    ensurePort p port
     box <- B.create opts
     liftEffect (State.save p.tool st)
     say ("VM " <> B.sandboxId box <> " is up")
-    bringUp p os c box
+    withConsole (not o'.detach) true box (bringUp p (not o'.detach) os c box)
     ready p st
     pure 0
 
@@ -265,10 +348,17 @@ status p = do
       let
         row k v = say ("  " <> String.take 10 (k <> "          ") <> v)
         portOf s = "127.0.0.1:" <> show s.port <> " -> " <> show p.guestPort
+      tint <- liftEffect Native.colorOutput
+      let paint code s = if tint then Native.ansi code s else s
       say p.tool
       case mm of
-        Nothing -> row "vm" "not created (state recorded; `start` recreates it)"
-        Just m -> row "vm" (m.id <> " " <> (if m.running then "running" else "stopped") <> ", " <> maybe m.image (describe p) st <> ", " <> show m.cpus <> " vCPU / " <> show m.mem <> " MiB")
+        Nothing -> do
+          row "status" "STOPPED"
+          row "vm" "not created (state recorded; `start` recreates it)"
+        Just m -> do
+          let exited = maybe "" (\code -> if code == 0 then "" else " (exited with " <> show code <> ")") (toMaybe m.exitCode)
+          row "status" (if m.running then paint "36" "RUNNING" else "STOPPED" <> exited)
+          row "vm" (m.id <> ", " <> maybe m.image (describe p) st <> ", " <> show m.cpus <> " vCPU / " <> show m.mem <> " MiB")
       for_ st \s -> row "port" (portOf s)
       cur <- currentBranch p
       let names = maybe [ "main" ] branchNames vol
@@ -287,6 +377,11 @@ status p = do
 
 shell :: Profile -> Aff Int
 shell p = requireRunning p >>= _.box >>> Sandbox.shell
+
+exec :: Profile -> { tty :: Boolean, command :: Array String } -> Aff Int
+exec p o = do
+  when (Array.null o.command) $ fail ("nothing to run — `" <> p.tool <> " exec CMD...`")
+  requireRunning p >>= _.box >>> Sandbox.execAttached o.tty o.command
 
 logs :: Profile -> { follow :: Boolean, boot :: Boolean } -> Aff Int
 logs p o = do
@@ -372,7 +467,7 @@ checkout p o = do
         when m.running do
           say ("Starting " <> p.tool <> " on branch " <> o.name <> " ...")
           _ <- B.start box
-          bringUp p os (creds st) box
+          bringUp p false os (creds st) box
         say ("Switched to branch '" <> o.name <> "'")
     pure 0
 
